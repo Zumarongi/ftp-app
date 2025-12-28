@@ -1,0 +1,78 @@
+# Node
+node_modules/
+**/node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime data
+pids/
+*.pid
+*.pid.lock
+
+# Environment files (ignore real envs but keep example files)
+.env
+.env.*.local
+.env.local
+!.env.example
+
+# Build outputs
+/dist/
+/build/
+/out/
+/release/
+/release-builds/
+/dist_electron/
+/dist-electron/
+/app/build/
+/app/dist/
+
+# Electron packaging artifacts
+*.asar
+app.asar
+*.nupkg
+*.exe
+*.dll
+*.dmg
+*.AppImage
+*.pkg
+*.deb
+*.rpm
+*.zip
+*.7z
+
+# Bundler / cache directories
+.cache/
+.parcel-cache/
+.next/
+.vite/
+.esbuild/
+node_modules/.cache/
+
+# Coverage directories
+coverage/
+.nyc_output/
+
+# TypeScript
+*.tsbuildinfo
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-workspace
+*.code-workspace
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Misc
+*.tgz
+.history/
