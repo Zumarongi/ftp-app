@@ -2,13 +2,30 @@
   "name": "ftp-app",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "src/electron/main.js",
   "scripts": {
-    "start": "electron .",
+  "dev:renderer": "vite --port 5173",
+  "dev:electron": "wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .",
+  "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:electron\"",
+    "build:renderer": "vite build",
+    "build:electron": "electron-builder",
+    "start": "npm run dev",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.2",
+  "concurrently": "^9.2.1",
+  "cross-env": "^7.0.3",
+  "electron": "^39.2.7",
+  "vite": "^7.3.0",
+  "wait-on": "^7.0.1"
+  },
+  "dependencies": {
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  }
 }
