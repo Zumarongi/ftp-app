@@ -1,0 +1,27 @@
+{
+  "name": "ftp-client-app",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/electron/main.js",
+  "scripts": {
+    "dev:renderer": "vite",
+    "dev:electron": "cross-env NODE_ENV=development electron .",
+    "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:electron\"",
+    "build:renderer": "vite build",
+    "build": "npm run build:renderer && electron-builder",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "basic-ftp": "^5.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "concurrently": "^8.2.0",
+    "cross-env": "^7.0.3",
+    "electron": "^26.0.0",
+    "electron-builder": "^24.6.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "vite": "^7.3.0"
+  }
+}
