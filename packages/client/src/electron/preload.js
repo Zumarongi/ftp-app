@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ftpList: (opts) => ipcRenderer.invoke('ftp:list', opts),
   ftpDownload: (opts) => ipcRenderer.invoke('ftp:download', opts),
   ftpUpload: (opts) => ipcRenderer.invoke('ftp:upload', opts),
+  ftpMkdir: (opts) => ipcRenderer.invoke('ftp:mkdir', opts),
+  ftpRemove: (opts) => ipcRenderer.invoke('ftp:remove', opts),
+  ftpRename: (opts) => ipcRenderer.invoke('ftp:rename', opts),
   ftpCancel: (opts) => ipcRenderer.invoke('ftp:cancelTask', opts),
   closeSession: (opts) => ipcRenderer.invoke('ftp:closeSession', opts),
   showSaveDialog: (opts) => ipcRenderer.invoke('dialog:showSave', opts),
@@ -67,5 +70,3 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   }
 });
-
-console.log('[preload] loaded');

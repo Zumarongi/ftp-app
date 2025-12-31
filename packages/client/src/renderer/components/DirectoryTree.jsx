@@ -1,76 +1,283 @@
-import React, { useEffect, useState } from 'react';
-
-function parseUnixList(raw) {
-  const lines = raw.split(/\r?\n/).filter(Boolean);
-  return lines.map(line => {
-    const parts = line.split(/\s+/);
-    const perms = parts[0] || '';
-    const name = parts.slice(8).join(' ') || parts[parts.length - 1] || line;
-    return { raw: line, name, isDir: perms[0] === 'd' };
-  });
-}
+import React, { useEffect, useState, useMemo } from 'react';
+import {
+  Card, CardHeader, CardContent, Box,
+  Stack, Button, Typography, List, ListItem,
+  ListItemText, IconButton, Divider,
+  Dialog, DialogTitle, DialogContent,
+  DialogActions, TextField, Breadcrumbs, Link
+} from '@mui/material';
+import DownloadIcon from '@mui/icons-material/Download';
+import FolderIcon from '@mui/icons-material/Folder';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import HomeIcon from '@mui/icons-material/Home';
 
 export default function DirectoryTree({ sessionId }) {
   const [cwd, setCwd] = useState('/');
   const [entries, setEntries] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState(null);
 
-  async function refresh(path) {
-    setLoading(true);
-    try {
-      const res = await window.electronAPI.ftpList({ sessionId, path });
-      // support both structured list (array) returned by basic-ftp wrapper and legacy raw text
-      if (Array.isArray(res.list)) {
-        const entries = res.list.map(item => ({ raw: item.raw || JSON.stringify(item), name: item.name || item.filename || '', isDir: (item.type === 'd' || item.type === 1 || item.isDirectory) }));
-        setEntries(entries);
-      } else {
-        const raw = res.raw || '';
-        setEntries(raw.trim() ? parseUnixList(raw) : []);
-      }
-    } catch (err) {
-      alert('LIST 失败: ' + (err.message||err));
-      setEntries([]);
-    } finally { setLoading(false); }
-  }
+  const [mkdirOpen, setMkdirOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [inputValue, setInputValue] = useState('');
 
-  useEffect(()=>{ if (sessionId) refresh(cwd); }, [sessionId, cwd]);
+  const joinPath = (base, name) => {
+    if (!base || base === '/') return `/${name}`;
+    return `${base}/${name}`;
+  };
 
-  function enter(entry) {
-    if (entry.isDir) {
-      const next = cwd === '/' ? `/${entry.name}` : `${cwd}/${entry.name}`;
-      setCwd(next);
-    } else {
-      const remote = cwd === '/' ? `/${entry.name}` : `${cwd}/${entry.name}`;
-      window.electronAPI.ftpDownload({ sessionId, remotePath: remote }).catch(err => alert('下载失败: ' + (err.message||err)));
-    }
-  }
-
-  function up() {
-    if (cwd === '/' || cwd === '') return;
-    const parts = cwd.split('/').filter(Boolean);
+  const parentPath = (path) => {
+    if (!path || path === '/') return '/';
+    const parts = path.split('/').filter(Boolean);
     parts.pop();
-    const next = '/' + parts.join('/');
-    setCwd(next === '/' ? '/' : next);
-  }
+    return '/' + parts.join('/');
+  };
+
+  const refresh = async () => {
+    if (!sessionId) {
+      setEntries([]);
+      return;
+    }
+    try {
+      const res = await window.electronAPI.ftpList({ sessionId, path: cwd });
+      setEntries(res.list || []);
+    } catch (err) {
+      console.error('ftpList error', err);
+      setEntries([]);
+    }
+  };
+
+  useEffect(() => { refresh(); }, [cwd, sessionId]);
+
+  const sortedEntries = useMemo(() => {
+    return [...entries].sort((a, b) => {
+      if (a.isDir && !b.isDir) return -1;
+      if (!a.isDir && b.isDir) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [entries]);
+
+  const enter = async (e) => {
+    if (e.isDir) {
+      setCwd(joinPath(cwd, e.name));
+    } else {
+      await window.electronAPI.ftpDownload({
+        sessionId,
+        remotePath: joinPath(cwd, e.name)
+      });
+    }
+  };
+
+  const doUp = () => {
+    if (cwd !== '/') {
+      setSelected(null);
+      setCwd(parentPath(cwd));
+    }
+  };
+
+  const doMkdir = async () => {
+    if (!inputValue) return;
+    await window.electronAPI.ftpMkdir({
+      sessionId,
+      remotePath: joinPath(cwd, inputValue)
+    });
+    setInputValue('');
+    setMkdirOpen(false);
+    refresh();
+  };
+
+  const doRename = async () => {
+    const e = sortedEntries[selected];
+    if (!e || !inputValue || inputValue === e.name) return;
+    await window.electronAPI.ftpRename({
+      sessionId,
+      oldPath: joinPath(cwd, e.name),
+      newPath: joinPath(cwd, inputValue)
+    });
+    setRenameOpen(false);
+    setSelected(null);
+    refresh();
+  };
+
+  const doRemove = async () => {
+    const e = sortedEntries[selected];
+    if (!e) return;
+    await window.electronAPI.ftpRemove({
+      sessionId,
+      remotePath: joinPath(cwd, e.name),
+      isDir: !!e.isDir
+    });
+    setConfirmOpen(false);
+    setSelected(null);
+    refresh();
+  };
+
+  const breadcrumbs = useMemo(() => {
+    const parts = cwd.split('/').filter(Boolean);
+    let acc = '';
+    return parts.map(p => {
+      acc += '/' + p;
+      return { name: p, path: acc };
+    });
+  }, [cwd]);
 
   return (
-    <div className="directory-tree">
-      <div className="dir-header">
-        <button onClick={()=>refresh(cwd)}>刷新</button>
-        <button onClick={up}>上级</button>
-        <span className="cwd">当前: {cwd}</span>
-      </div>
-      {loading ? <div>加载中…</div> : (
-        <ul className="entries">
-          {entries.map((e,i)=>(
-            <li key={i} className={e.isDir ? 'dir' : 'file'} onDoubleClick={()=>enter(e)}>
-              <span className="name">{e.name}</span>
-              {!e.isDir && <button onClick={(ev)=>{ev.stopPropagation(); enter(e);}}>下载</button>}
-            </li>
-          ))}
-          {!entries.length && <li className="placeholder">无条目</li>}
-        </ul>
-      )}
-    </div>
+    <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <CardHeader title="远程文件浏览" />
+
+      <CardContent sx={{ flex: 1, overflow: 'hidden' }}>
+        {!sessionId ? (
+          <Box color="text.secondary">请先连接站点</Box>
+        ) : (
+          <Stack spacing={1} height="100%">
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Button startIcon={<RefreshIcon />} onClick={refresh}>刷新</Button>
+              <Button
+                startIcon={<ArrowUpwardIcon />}
+                disabled={cwd === '/'}
+                onClick={doUp}
+              >
+                上一级
+              </Button>
+              <Button
+                startIcon={<HomeIcon />}
+                onClick={() => setCwd('/')}
+              >
+                根目录
+              </Button>
+            </Stack>
+
+            <Breadcrumbs sx={{ fontSize: 12 }}>
+              <Link
+                underline="hover"
+                color="inherit"
+                onClick={() => setCwd('/')}
+                sx={{ cursor: 'pointer' }}
+              >
+                /
+              </Link>
+              {breadcrumbs.map(b => (
+                <Link
+                  key={b.path}
+                  underline="hover"
+                  color="inherit"
+                  onClick={() => setCwd(b.path)}
+                  sx={{ cursor: 'pointer' }}
+                >
+                  {b.name}
+                </Link>
+              ))}
+            </Breadcrumbs>
+
+            <Divider />
+
+            <Box sx={{ flex: 1, overflow: 'auto' }}>
+              <List dense>
+                {sortedEntries.map((e, i) => (
+                  <ListItem
+                    key={e.name + i}
+                    selected={selected === i}
+                    onClick={() => setSelected(i)}
+                    onDoubleClick={() => enter(e)}
+                    secondaryAction={
+                      !e.isDir && (
+                        <IconButton onClick={() => enter(e)}>
+                          <DownloadIcon />
+                        </IconButton>
+                      )
+                    }
+                  >
+                    {e.isDir ? <FolderIcon sx={{ mr: 1 }} /> : null}
+                    <ListItemText
+                      primary={e.name}
+                      secondary={e.isDir ? '目录' : '文件'}
+                    />
+                  </ListItem>
+                ))}
+                {!sortedEntries.length && (
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ p: 2 }}
+                  >
+                    当前目录为空
+                  </Typography>
+                )}
+              </List>
+            </Box>
+
+            {selected !== null && sortedEntries[selected] && (
+              <Stack direction="row" spacing={1}>
+                <Button color="error" onClick={() => setConfirmOpen(true)}>删除</Button>
+                <Button onClick={() => {
+                  setInputValue(sortedEntries[selected].name);
+                  setRenameOpen(true);
+                }}>
+                  重命名
+                </Button>
+                {!sortedEntries[selected].isDir && (
+                  <Button onClick={() => enter(sortedEntries[selected])}>
+                    下载
+                  </Button>
+                )}
+              </Stack>
+            )}
+
+            <Button
+              variant="outlined"
+              onClick={() => setMkdirOpen(true)}
+            >
+              新建文件夹
+            </Button>
+          </Stack>
+        )}
+      </CardContent>
+
+      <Dialog open={mkdirOpen} onClose={() => setMkdirOpen(false)}>
+        <DialogTitle>新建文件夹</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus fullWidth
+            label="文件夹名称"
+            value={inputValue}
+            onChange={e => setInputValue(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMkdirOpen(false)}>取消</Button>
+          <Button variant="contained" onClick={doMkdir}>确定</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={renameOpen} onClose={() => setRenameOpen(false)}>
+        <DialogTitle>重命名</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus fullWidth
+            label="新名称"
+            value={inputValue}
+            onChange={e => setInputValue(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRenameOpen(false)}>取消</Button>
+          <Button variant="contained" onClick={doRename}>确定</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
+        <DialogTitle>确认删除</DialogTitle>
+        <DialogContent>
+          <Typography>
+            确认删除「{sortedEntries[selected]?.name}」？
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)}>取消</Button>
+          <Button color="error" variant="contained" onClick={doRemove}>删除</Button>
+        </DialogActions>
+      </Dialog>
+    </Card>
   );
 }

@@ -5,12 +5,11 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const crypto = require('crypto');
 
 // Configuration defaults (will be replaced by message from main)
 let cfg = {
   port: 2121,
-  pasvRange: [30000, 30100],
+  pasvRange: [30000, 60000],
   rootBase: path.join(os.homedir(), 'ftp-root'),
   usersDb: path.join(process.cwd(), 'ftp_users.db'),
   maxConnections: 50
@@ -29,10 +28,8 @@ function ensureDir(p) {
 }
 
 function normalizeVirtualPath(userHome, requested) {
-  // requested may be absolute or relative
   let p = requested || '/';
   if (!p.startsWith('/')) p = path.posix.join('/', p);
-  // map to OS path under userHome
   const resolved = path.resolve(userHome, '.' + p); // '.' avoids stripping leading slash
   // ensure prefix
   if (!resolved.startsWith(userHome)) {
@@ -53,11 +50,8 @@ function allocPasvPort() {
 }
 function freePasvPort(p) { pasvPool.delete(p); }
 
-// Very simple user store using JSON-backed file for worker (main uses sqlite for admin UI).
-// Worker will read a users.json exported by main. For robustness, main should send user list in start message.
 let usersCache = {}; // username -> { username, passwordHash, home, perms }
 
-// permission bits: READ=1, WRITE=2, DELETE=4, MKDIR=8, RENAME=16 (default 31 = all)
 const PERM_READ = 1;
 const PERM_WRITE = 2;
 const PERM_DELETE = 4;
@@ -174,10 +168,8 @@ function onControlConnection(socket) {
         if (!state.user) return send('530 No user specified');
         const uobj = state.userObj;
         if (!uobj) return send('530 Login incorrect');
-        // simple compare hash: uobj.passwordHash is bcrypt hash
         const bcrypt = require('bcryptjs');
         if (bcrypt.compareSync(arg, uobj.passwordHash)) {
-          // set user's real home under rootBase
           const userHome = path.resolve(cfg.rootBase, uobj.home || uobj.username);
           ensureDir(userHome);
           state.userHome = userHome;
@@ -195,11 +187,9 @@ function onControlConnection(socket) {
         if (!state.userHome) return send('530 Not logged in');
         const target = arg || '/';
         const resolved = normalizeVirtualPath(state.userHome, target);
-        // ensure exists and is directory
         try {
           const st = fs.statSync(resolved);
           if (!st.isDirectory()) return send('550 Not a directory');
-          // compute virtual path
           let virt = '/' + path.relative(state.userHome, resolved).replace(/\\/g,'/');
           if (virt === '/.') virt = '/';
           state.cwd = virt === '/' ? '/' : virt;
@@ -219,8 +209,16 @@ function onControlConnection(socket) {
         const pasvSrv = net.createServer();
         pasvSrv.maxConnections = 1;
         pasvSrv.listen(port, () => {
-          const host = socket.localAddress || '127.0.0.1';
-          const parts = host.split('.').map(Number);
+          // Derive an IPv4 dotted-quad for the PASV response.
+          // socket.localAddress may be IPv6 or IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1)
+          let host = socket.localAddress || '127.0.0.1';
+          if (typeof host === 'string' && host.startsWith('::ffff:')) {
+            host = host.split(':').pop();
+          }
+          if (host === '::1') host = '127.0.0.1';
+          // Fallback to loopback if not a dotted IPv4 address
+          if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) host = '127.0.0.1';
+          const parts = host.split('.').map(n => Number(n));
           const p1 = Math.floor(port / 256);
           const p2 = port % 256;
           const resp = `227 Entering Passive Mode (${parts.join(',')},${p1},${p2})`;
@@ -234,12 +232,29 @@ function onControlConnection(socket) {
       } else if (up === 'LIST') {
         if (!state.userHome) return send('530 Not logged in');
         if (!hasPerm(state.userObj, PERM_READ)) return send('550 Permission denied');
-        // prepare data connection
-        const listingPath = arg || state.cwd || '/';
+        const [pref, ...rest] = arg.split(' ');
+        const argPath = rest.join('') ? rest.join(' ') : '';
+        const listingPath = argPath || state.cwd || '/';
         const realPath = normalizeVirtualPath(state.userHome, listingPath);
+
+        console.log('LIST realPath=', realPath);
+
         send('150 Opening ASCII mode data connection for file list');
         await sendListOverData(state, realPath);
         send('226 Transfer complete');
+      } else if (up === 'SIZE') {
+        // Return size of a file in bytes: 213 <size>
+        if (!state.userHome) return send('530 Not logged in');
+        if (!hasPerm(state.userObj, PERM_READ)) return send('550 Permission denied');
+        const remote = arg;
+        const real = normalizeVirtualPath(state.userHome, remote);
+        try {
+          const st = fs.statSync(real);
+          if (!st.isFile()) return send('550 Not a file');
+          send('213 ' + String(st.size));
+        } catch (e) {
+          send('550 File not found');
+        }
       } else if (up === 'RETR') {
         if (!state.userHome) return send('530 Not logged in');
         if (!hasPerm(state.userObj, PERM_READ)) return send('550 Permission denied');
@@ -346,8 +361,22 @@ function writeList(dsock, realPath, cb) {
       try { stats = fs.statSync(full); } catch(e) { stats = { size:0, mtime: new Date() }; }
       const perms = dirent.isDirectory() ? 'drwxr-xr-x' : '-rw-r--r--';
       const size = stats.size;
-      const mtime = stats.mtime.toISOString().replace('T',' ').slice(0,19);
-      out += `${perms} 1 owner group ${size} ${mtime} ${name}\r\n`;
+      // format mtime in Unix ls -l style: 'Mon DD HH:MM' for recent files, or 'Mon DD  YYYY' for older
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const m = stats.mtime;
+      const now = new Date();
+      const sixMonthsMs = 182 * 24 * 60 * 60 * 1000; // approx 6 months
+      const mon = months[m.getMonth()];
+      const day = String(m.getDate()).padStart(2, ' ');
+      let timeOrYear;
+      if (Math.abs(now - m) < sixMonthsMs) {
+        const hh = String(m.getHours()).padStart(2,'0');
+        const mm = String(m.getMinutes()).padStart(2,'0');
+        timeOrYear = `${hh}:${mm}`;
+      } else {
+        timeOrYear = String(m.getFullYear());
+      }
+      out += `${perms} 1 owner group ${size} ${mon} ${day} ${timeOrYear} ${name}\r\n`;
     });
     try { dsock.write(out); dsock.end(); } catch(e){}
     cb();

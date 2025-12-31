@@ -6,25 +6,79 @@ class FtpClient extends EventEmitter {
   constructor() {
     super();
     this.client = new ftp.Client(); // default timeout ~ 0 (infinite) - you can set client.ftp.timeout
-    this.client.ftp.verbose = false;
+    this.client.ftp.verbose = true;
     this._progressHandler = null;
     // sensible default timeout for control operations (ms)
     this.client.ftp.timeout = 15000;
   }
 
-  async connect({ host, port = 21, user = "anonymous", pass = "", secure = false }) {
-    await this.client.access({
-      host,
-      port,
-      user,
-      password: pass,
-      secure
-    });
+  async connect({ host, port = 21, user = "anonymous", pass = "", secure = false, timeout } = {}) {
+    // allow caller to override control socket timeout (ms)
+    if (typeof timeout === 'number' && timeout > 0) this.client.ftp.timeout = timeout;
+    try {
+      await this.client.access({
+        host,
+        port,
+        user,
+        password: pass,
+        secure
+      });
+    } catch (err) {
+      // rethrow to let callers handle and add context if needed
+      throw err;
+    }
   }
 
   async list(remotePath = "") {
     // returns array of objects {name, size, type, rawModifiedAt, owner,...}
-    return await this.client.list(remotePath);
+    // console.log('FtpClient.list', remotePath);
+    const raw = await this.client.list(remotePath);
+    // normalize entries to include `isDir` boolean and `path` if possible
+    return raw.map(e => ({
+      name: e.name,
+      size: e.size,
+      type: e.type,
+      rawModifiedAt: e.rawModifiedAt,
+      isDir: e.type === 'd' || e.type === 'D' || !!e.isDirectory,
+      raw: e
+    }));
+  }
+
+  async makeDir(remotePath) {
+    // basic-ftp provides send/ensureDir; use send MKD to create single dir
+    try {
+      await this.client.send(`MKD ${remotePath}`);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async remove(remotePath, isDir = false) {
+    try {
+      if (isDir) {
+        // remove directory (non-recursive). If recursive needed, callers should list contents first.
+        if (typeof this.client.removeDir === 'function') {
+          await this.client.removeDir(remotePath);
+        } else {
+          await this.client.send(`RMD ${remotePath}`);
+        }
+      } else {
+        await this.client.remove(remotePath);
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async rename(oldPath, newPath) {
+    try {
+      await this.client.rename(oldPath, newPath);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
   }
 
   async size(remotePath) {
@@ -43,6 +97,8 @@ class FtpClient extends EventEmitter {
    */
   async download(remotePath, localPath, opts = {}) {
     const { resume = true, onProgress } = opts;
+
+    console.log('FtpClient.download', { remotePath, localPath });
 
     const remoteSize = await this.size(remotePath).catch(()=>undefined);
     let startAt = 0;

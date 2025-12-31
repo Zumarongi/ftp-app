@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const { Worker } = require('worker_threads');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
@@ -9,6 +10,27 @@ app.disableHardwareAcceleration();
 
 const dbPath = path.join(process.cwd(), 'ftp_users.db');
 const db = new Database(dbPath);
+
+// read package-level .env for server defaults (optional)
+let envRootBase;
+try {
+  const envPath = path.join(__dirname, '..', '..', '.env');
+  if (fs.existsSync(envPath)) {
+    const txt = fs.readFileSync(envPath, 'utf8');
+    txt.split(/\r?\n/).forEach(line => {
+      line = line.trim();
+      if (!line || line.startsWith('#')) return;
+      const idx = line.indexOf('=');
+      if (idx === -1) return;
+      const key = line.slice(0, idx).trim();
+      let val = line.slice(idx + 1).trim();
+      if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+      if (key === 'ROOT_BASE') envRootBase = val;
+    });
+  }
+} catch (e) {
+  console.error('Failed to read server .env', e && e.message);
+}
 
 db.prepare(`CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
@@ -41,7 +63,7 @@ function createWindow() {
 
   if (process.env.NODE_ENV === 'development') {
     mainWindow.loadURL('http://localhost:5173');
-    // mainWindow.webContents.openDevTools();
+    mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
@@ -56,10 +78,10 @@ app.on('window-all-closed', () => {
 function startFtpServer(config = {}) {
   if (ftpWorker) return;
   const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
-  // worker file lives next to this main file (ftpServer.js)
   const workerPath = path.join(__dirname, 'ftpServer.js');
   ftpWorker = new Worker(workerPath);
   ftpWorker.on('message', (msg) => {
+    try { console.log('[ftpWorker]', typeof msg === 'object' ? JSON.stringify(msg) : String(msg)); } catch (e) {}
     if (!mainWindow) return;
     if (msg.type === 'log') mainWindow.webContents.send('server:log', msg);
     else if (msg.type === 'started') mainWindow.webContents.send('server:started', msg);
@@ -67,7 +89,9 @@ function startFtpServer(config = {}) {
     else mainWindow.webContents.send('server:event', msg);
   });
   ftpWorker.on('error', (err) => { if (mainWindow) mainWindow.webContents.send('server:error', { error: err.message }); });
-  ftpWorker.postMessage({ cmd: 'start', cfg: config, users });
+  const cfgToSend = { ...config };
+  if (!cfgToSend.rootBase && envRootBase) cfgToSend.rootBase = envRootBase;
+  ftpWorker.postMessage({ cmd: 'start', cfg: cfgToSend, users });
 }
 
 function stopFtpServer() {

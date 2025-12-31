@@ -1,4 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+
+// Disable GPU/Hardware acceleration to avoid GPU process initialization errors
+try { app.disableHardwareAcceleration(); } catch (e) { /* ignore */ }
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -6,6 +9,10 @@ const FtpClient = require('./ftpClient');
 
 const sessions = new Map(); // sessionId -> client
 const tasks = new Map(); // taskId -> { status, ... }
+
+function makeId(prefix = '') {
+  return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+}
 
 function createMainWindow() {
   const win = new BrowserWindow({
@@ -20,7 +27,7 @@ function createMainWindow() {
   if (process.env.NODE_ENV === 'development') {
     const devUrl = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5174';
     win.loadURL(devUrl);
-    // win.webContents.openDevTools();
+    win.webContents.openDevTools();
   } else {
     win.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
@@ -29,9 +36,14 @@ function createMainWindow() {
 app.whenReady().then(createMainWindow);
 
 // IPC: create session
-ipcMain.handle('ftp:createSession', async (_, { host, port=21, user='anonymous', pass='', secure=false }) => {
+ipcMain.handle('ftp:createSession', async (_, { host, port=21, user='anonymous', pass='', secure=false, timeout } ) => {
   const client = new FtpClient();
-  await client.connect({ host, port, user, pass, secure });
+  try {
+    await client.connect({ host, port, user, pass, secure, timeout });
+  } catch (err) {
+    // provide clearer error message upstream
+    throw new Error(`连接 FTP 主机失败: ${err && err.message ? err.message : String(err)}`);
+  }
   const sessionId = makeId('s');
   sessions.set(sessionId, client);
   return { sessionId };
@@ -52,10 +64,17 @@ ipcMain.handle('ftp:download', async (_, { sessionId, remotePath, localPath }) =
 
   if (!localPath) { // default to ~/Downloads/<basename>
     const base = path.basename(remotePath);
-    const downloads = path.join(os.homedir(), 'Downloads');
+    const downloads = path.join(os.homedir(), 'ftpDownloads');
     localPath = path.join(downloads, base);
   }
 
+  const dir = path.dirname(localPath);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    throw new Error(`无法创建下载目录: ${dir}, ${err.message}`);
+  }
+  
   const taskId = Date.now().toString(36) + Math.random().toString(36).slice(2,8);
   tasks.set(taskId, { sessionId, remotePath, localPath, status: 'running' });
 
@@ -124,6 +143,27 @@ ipcMain.handle('ftp:closeSession', async (_, { sessionId }) => {
     sessions.delete(sessionId);
   }
   return { ok: true };
+});
+
+// IPC: make directory
+ipcMain.handle('ftp:mkdir', async (_, { sessionId, remotePath }) => {
+  const client = sessions.get(sessionId);
+  if (!client) throw new Error('Invalid sessionId');
+  return await client.makeDir(remotePath);
+});
+
+// IPC: remove file or directory
+ipcMain.handle('ftp:remove', async (_, { sessionId, remotePath, isDir=false }) => {
+  const client = sessions.get(sessionId);
+  if (!client) throw new Error('Invalid sessionId');
+  return await client.remove(remotePath, isDir);
+});
+
+// IPC: rename
+ipcMain.handle('ftp:rename', async (_, { sessionId, oldPath, newPath }) => {
+  const client = sessions.get(sessionId);
+  if (!client) throw new Error('Invalid sessionId');
+  return await client.rename(oldPath, newPath);
 });
 
 // Optionally expose dialog for save-as
