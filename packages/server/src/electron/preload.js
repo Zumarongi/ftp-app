@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('serverAPI', {
   start: (cfg) => ipcRenderer.invoke('server:start', cfg),
   stop: () => ipcRenderer.invoke('server:stop'),
   addUser: (user) => ipcRenderer.invoke('server:addUser', user),
+  updateUser: (user) => ipcRenderer.invoke('server:updateUser', user),
   listUsers: () => ipcRenderer.invoke('server:listUsers'),
   removeUser: (u) => ipcRenderer.invoke('server:removeUser', u),
   onLog: (cb) => ipcRenderer.on('server:log', (_, data) => cb(data)),

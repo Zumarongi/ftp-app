@@ -16,14 +16,14 @@ db.prepare(`CREATE TABLE IF NOT EXISTS users (
   username TEXT UNIQUE,
   passwordHash TEXT,
   home TEXT,
-  perms INTEGER DEFAULT 7
+  perms INTEGER DEFAULT 31
 )`).run();
 
 // seed default admin
 const rowcount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
 if (rowcount === 0) {
   const pass = bcrypt.hashSync('password', 10);
-  db.prepare('INSERT INTO users(username,passwordHash,home) VALUES(?,?,?)').run('admin', pass, 'admin_home');
+  db.prepare('INSERT INTO users(username,passwordHash,home,perms) VALUES(?,?,?,?)').run('admin', pass, 'admin_home', 31);
 }
 
 let mainWindow = null;
@@ -56,8 +56,9 @@ app.on('window-all-closed', () => {
 
 function startFtpServer(config = {}) {
   if (ftpWorker) return;
-  const users = db.prepare('SELECT username,passwordHash,home FROM users').all();
-  const workerPath = path.join(__dirname, 'server', 'ftp_server_worker.js');
+  const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
+  // worker file lives next to this main file (ftpServer.js)
+  const workerPath = path.join(__dirname, 'ftpServer.js');
   ftpWorker = new Worker(workerPath);
   ftpWorker.on('message', (msg) => {
     if (!mainWindow) return;
@@ -81,13 +82,13 @@ ipcMain.handle('server:start', async (_, cfg) => { startFtpServer(cfg); return {
 
 ipcMain.handle('server:stop', async () => { stopFtpServer(); return { ok: true }; });
 
-ipcMain.handle('server:listUsers', async () => { const rows = db.prepare('SELECT id,username,home FROM users').all(); return { users: rows }; });
+ipcMain.handle('server:listUsers', async () => { const rows = db.prepare('SELECT id,username,home,perms FROM users').all(); return { users: rows }; });
 
-ipcMain.handle('server:addUser', async (_, { username, password, home }) => {
+ipcMain.handle('server:addUser', async (_, { username, password, home, perms = 31 }) => {
   try {
     const hash = bcrypt.hashSync(password, 10);
-    db.prepare('INSERT INTO users(username,passwordHash,home) VALUES(?,?,?)').run(username, hash, home);
-    const users = db.prepare('SELECT username,passwordHash,home FROM users').all();
+    db.prepare('INSERT INTO users(username,passwordHash,home,perms) VALUES(?,?,?,?)').run(username, hash, home, perms);
+    const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
     if (ftpWorker) ftpWorker.postMessage({ cmd: 'reloadUsers', users });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -96,10 +97,29 @@ ipcMain.handle('server:addUser', async (_, { username, password, home }) => {
 ipcMain.handle('server:removeUser', async (_, { username }) => {
   db.prepare('DELETE FROM users WHERE username = ?').run(username);
   if (ftpWorker) {
-    const users = db.prepare('SELECT username,passwordHash,home FROM users').all();
+    const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
     ftpWorker.postMessage({ cmd: 'reloadUsers', users });
   }
   return { ok: true };
+});
+
+ipcMain.handle('server:updateUser', async (_, { username, password, home, perms }) => {
+  try {
+    if (!username) return { ok: false, error: 'username required' };
+    if (typeof password !== 'undefined' && password !== null && password !== '') {
+      const hash = bcrypt.hashSync(password, 10);
+      db.prepare('UPDATE users SET passwordHash = ?, home = ?, perms = ? WHERE username = ?').run(hash, home, perms, username);
+    } else {
+      db.prepare('UPDATE users SET home = ?, perms = ? WHERE username = ?').run(home, perms, username);
+    }
+    if (ftpWorker) {
+      const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
+      ftpWorker.postMessage({ cmd: 'reloadUsers', users });
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 ipcMain.handle('server:dbPath', async () => ({ path: dbPath }));

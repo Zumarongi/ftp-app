@@ -57,6 +57,18 @@ function freePasvPort(p) { pasvPool.delete(p); }
 // Worker will read a users.json exported by main. For robustness, main should send user list in start message.
 let usersCache = {}; // username -> { username, passwordHash, home, perms }
 
+// permission bits: READ=1, WRITE=2, DELETE=4, MKDIR=8, RENAME=16 (default 31 = all)
+const PERM_READ = 1;
+const PERM_WRITE = 2;
+const PERM_DELETE = 4;
+const PERM_MKDIR = 8;
+const PERM_RENAME = 16;
+function hasPerm(uobj, flag) {
+  if (!uobj) return false;
+  const p = (typeof uobj.perms !== 'undefined') ? Number(uobj.perms) : 31;
+  return (p & flag) === flag;
+}
+
 parentPort.on('message', async (m) => {
   try {
     if (m.cmd === 'start') {
@@ -199,6 +211,7 @@ function onControlConnection(socket) {
         state.type = arg || 'I';
         send('200 Type set to ' + state.type);
       } else if (up === 'PASV') {
+        if (!state.userObj || !hasPerm(state.userObj, PERM_READ)) return send('550 Permission denied');
         if (!state.userHome) return send('530 Not logged in');
         cleanupPasv(state);
         const port = allocPasvPort();
@@ -220,6 +233,7 @@ function onControlConnection(socket) {
         state.pasv = { server: pasvSrv, port };
       } else if (up === 'LIST') {
         if (!state.userHome) return send('530 Not logged in');
+        if (!hasPerm(state.userObj, PERM_READ)) return send('550 Permission denied');
         // prepare data connection
         const listingPath = arg || state.cwd || '/';
         const realPath = normalizeVirtualPath(state.userHome, listingPath);
@@ -228,6 +242,7 @@ function onControlConnection(socket) {
         send('226 Transfer complete');
       } else if (up === 'RETR') {
         if (!state.userHome) return send('530 Not logged in');
+        if (!hasPerm(state.userObj, PERM_READ)) return send('550 Permission denied');
         const remote = arg;
         const real = normalizeVirtualPath(state.userHome, remote);
         try {
@@ -241,6 +256,7 @@ function onControlConnection(socket) {
         }
       } else if (up === 'STOR') {
         if (!state.userHome) return send('530 Not logged in');
+        if (!hasPerm(state.userObj, PERM_WRITE)) return send('550 Permission denied');
         const remote = arg;
         const real = normalizeVirtualPath(state.userHome, remote);
         send('150 Opening data connection for STOR');
@@ -248,10 +264,12 @@ function onControlConnection(socket) {
         send('226 Transfer complete');
       } else if (up === 'MKD') {
         if (!state.userHome) return send('530 Not logged in');
+        if (!hasPerm(state.userObj, PERM_MKDIR)) return send('550 Permission denied');
         const real = normalizeVirtualPath(state.userHome, arg);
         try { fs.mkdirSync(real, { recursive: true }); send('257 Directory created'); } catch(e) { send('550 Failed to create'); }
       } else if (up === 'RMD' || up === 'DELE') {
         if (!state.userHome) return send('530 Not logged in');
+        if (!hasPerm(state.userObj, PERM_DELETE)) return send('550 Permission denied');
         const real = normalizeVirtualPath(state.userHome, arg);
         try {
           if (up === 'RMD') fs.rmdirSync(real, { recursive: true });
@@ -259,10 +277,13 @@ function onControlConnection(socket) {
           send('250 OK');
         } catch (e) { send('550 Failed'); }
       } else if (up === 'RNFR') {
+        if (!state.userHome) return send('530 Not logged in');
+        if (!hasPerm(state.userObj, PERM_RENAME)) return send('550 Permission denied');
         state.renameFrom = normalizeVirtualPath(state.userHome, arg);
         send('350 RNFR accepted, ready for RNTO');
       } else if (up === 'RNTO') {
         if (!state.renameFrom) return send('503 Bad sequence');
+        if (!hasPerm(state.userObj, PERM_RENAME)) return send('550 Permission denied');
         const to = normalizeVirtualPath(state.userHome, arg);
         try { fs.renameSync(state.renameFrom, to); send('250 Rename successful'); state.renameFrom = null; } catch(e) { send('550 Rename failed'); }
       } else if (up === 'QUIT') {
