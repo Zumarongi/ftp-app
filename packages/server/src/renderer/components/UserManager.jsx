@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   Card, CardHeader, CardContent,
   TextField, Button, Stack,
@@ -11,6 +11,9 @@ const PERM_WRITE = 2;
 const PERM_DELETE = 4;
 const PERM_MKDIR = 8;
 const PERM_RENAME = 16;
+
+const USERNAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]{2,31}$/;
+const HOME_RE = /^[a-zA-Z0-9_-]+$/;
 
 export default function UserManager() {
   const [users, setUsers] = useState([]);
@@ -30,11 +33,45 @@ export default function UserManager() {
     setUsers(res.users || []);
   }
 
+  useEffect(() => {
+    if (!editing) {
+      setForm(f => ({ ...f, home: form.username }));
+    }
+  }, [form.username]);
+
+  const errors = useMemo(() => {
+    const e = {};
+
+    if (!form.username) {
+      e.username = '用户名不能为空';
+    } else if (!USERNAME_RE.test(form.username)) {
+      e.username = '用户名必须以字母开头，仅包含字母、数字、下划线"\_"和短横杠"-"，长度3-32字符';
+    }
+
+    if (!form.home) {
+      e.home = 'Home 不能为空';
+    } else if (!HOME_RE.test(form.home)) {
+      e.home = 'Home 仅允许字母、数字、下划线"\_"和短横杠"-"';
+    }
+
+    if (!editing && !form.password) {
+      e.password = '新用户必须设置密码';
+    }
+
+    return e;
+  }, [form, editing]);
+
+  const hasError = Object.keys(errors).length > 0;
+
   function togglePerm(bit) {
     setForm(f => ({ ...f, perms: f.perms ^ bit }));
   }
 
   async function submit() {
+    if (hasError) {
+      setMessage({ type: 'error', text: errors.username || errors.password || errors.home });
+      return;
+    }
     const api = editing ? window.serverAPI.updateUser : window.serverAPI.addUser;
     const res = await api(form);
     if (!res.ok) {
@@ -55,6 +92,7 @@ export default function UserManager() {
 
   function edit(u) {
     setEditing(true);
+    setMessage(null);
     setForm({ username: u.username, password: '', home: u.home, perms: u.perms });
   }
 
@@ -70,16 +108,24 @@ export default function UserManager() {
               label="用户名"
               value={form.username}
               disabled={editing}
+              error={editing && !!errors.username}
+              helperText={editing && errors.username || ' '}
               onChange={e => setForm({ ...form, username: e.target.value })}
             />
             <TextField
-              label="密码（留空不变）"
+              label="密码"
+              type="password"
               value={form.password}
+              error={editing && !!errors.password}
+              helperText={editing ? (errors.password || '留空表示不修改') : ' '}
               onChange={e => setForm({ ...form, password: e.target.value })}
             />
             <TextField
-              label="Home"
+              label="Home（虚拟根目录）"
               value={form.home}
+              disabled={editing}
+              error={editing && !!errors.home}
+              helperText={editing ? (errors.home || '默认等于用户名') : ' '}
               onChange={e => setForm({ ...form, home: e.target.value })}
             />
           </Stack>

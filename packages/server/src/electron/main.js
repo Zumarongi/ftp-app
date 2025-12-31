@@ -10,7 +10,6 @@ app.disableHardwareAcceleration();
 const dbPath = path.join(process.cwd(), 'ftp_users.db');
 const db = new Database(dbPath);
 
-// ensure users table
 db.prepare(`CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
   username TEXT UNIQUE,
@@ -84,12 +83,29 @@ ipcMain.handle('server:stop', async () => { stopFtpServer(); return { ok: true }
 
 ipcMain.handle('server:listUsers', async () => { const rows = db.prepare('SELECT id,username,home,perms FROM users').all(); return { users: rows }; });
 
+function validateUsername(username) {
+  return typeof username === 'string'
+    && /^[a-zA-Z][a-zA-Z0-9_-]{2,31}$/.test(username);
+}
+
+function validateHome(home) {
+  return typeof home === 'string'
+    && /^[a-zA-Z0-9_-]+$/.test(home)
+    && !home.includes('..');
+}
+
 ipcMain.handle('server:addUser', async (_, { username, password, home, perms = 31 }) => {
   try {
+    if (!validateUsername(username)) return { ok: false, error: 'Invalid username' };
+    if (!password) return { ok: false, error: 'Password required' };
+
+    home = username;
+    if (!validateHome(home)) return { ok: false, error: 'Invalid home' };
+
     const hash = bcrypt.hashSync(password, 10);
     db.prepare('INSERT INTO users(username,passwordHash,home,perms) VALUES(?,?,?,?)').run(username, hash, home, perms);
     const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
-    if (ftpWorker) ftpWorker.postMessage({ cmd: 'reloadUsers', users });
+    ftpWorker?.postMessage({ cmd: 'reloadUsers', users });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -105,21 +121,19 @@ ipcMain.handle('server:removeUser', async (_, { username }) => {
 
 ipcMain.handle('server:updateUser', async (_, { username, password, home, perms }) => {
   try {
-    if (!username) return { ok: false, error: 'username required' };
-    if (typeof password !== 'undefined' && password !== null && password !== '') {
+    if (!validateUsername(username)) return { ok: false, error: 'Invalid username' };
+    const existing = db.prepare('SELECT home FROM users WHERE username = ?').get(username);
+    if (!existing) return { ok: false, error: 'User not found' };
+    if (password) {
       const hash = bcrypt.hashSync(password, 10);
-      db.prepare('UPDATE users SET passwordHash = ?, home = ?, perms = ? WHERE username = ?').run(hash, home, perms, username);
+      db.prepare('UPDATE users SET passwordHash=?, perms=? WHERE username=?').run(hash, perms, username);
     } else {
-      db.prepare('UPDATE users SET home = ?, perms = ? WHERE username = ?').run(home, perms, username);
+      db.prepare('UPDATE users SET perms=? WHERE username=?').run(perms, username);
     }
-    if (ftpWorker) {
-      const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
-      ftpWorker.postMessage({ cmd: 'reloadUsers', users });
-    }
+    const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
+    ftpWorker?.postMessage({ cmd: 'reloadUsers', users });
     return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
+  } catch (e) { return { ok: false, error: e.message };} }
+);
 
 ipcMain.handle('server:dbPath', async () => ({ path: dbPath }));
