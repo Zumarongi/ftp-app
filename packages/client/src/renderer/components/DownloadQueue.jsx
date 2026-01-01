@@ -1,37 +1,102 @@
 import React, { useEffect, useState } from 'react';
 import {
   Card, CardHeader, CardContent,
-  Stack, Typography, LinearProgress, Box
+  Stack, Typography, LinearProgress, Box, Chip
 } from '@mui/material';
 
 export default function DownloadQueue() {
-  const [tasks, setTasks] = useState([]);
+  const [tasks, setTasks] = useState({});
 
   useEffect(() => {
-    window.electronAPI?.onProgress?.(p => {
+    const api = window.electronAPI;
+
+    api.onProgress(p => {
+      console.log('Download progress', p);
       setTasks(prev => {
-        const idx = prev.findIndex(t => t.taskId === p.taskId);
-        const next = { ...p, progress: p.total ? p.bytes / p.total * 100 : 0 };
-        if (idx === -1) return [next, ...prev];
-        const arr = [...prev]; arr[idx] = next; return arr;
+        const old = prev[p.taskId] || {};
+        return {
+          ...prev,
+          [p.taskId]: {
+            ...old,
+            taskId: p.taskId,
+            filename: p.filename || old.filename,
+            remotePath: p.remotePath || old.remotePath,
+            bytes: p.bytes,
+            total: p.total,
+            status: 'downloading'
+          }
+        };
       });
     });
+
+    api.onCompleted(p => {
+      setTasks(prev => ({
+        ...prev,
+        [p.taskId]: {
+          ...prev[p.taskId],
+          status: 'completed'
+        }
+      }));
+    });
+
+    api.onError(p => {
+      setTasks(prev => ({
+        ...prev,
+        [p.taskId]: {
+          ...prev[p.taskId],
+          status: 'error',
+          error: p.error
+        }
+      }));
+    });
+
+    api.onCancelled(p => {
+      setTasks(prev => ({
+        ...prev,
+        [p.taskId]: {
+          ...prev[p.taskId],
+          status: 'cancelled'
+        }
+      }));
+    });
   }, []);
+
+  const list = Object.values(tasks);
 
   return (
     <Card sx={{ height: '100%' }}>
       <CardHeader title="下载队列" />
-      <CardContent sx={{ height: '100%', overflow: 'auto' }}>
+      <CardContent sx={{ overflow: 'auto' }}>
         <Stack spacing={1}>
-          {tasks.length === 0 && (
-            <Typography color="text.secondary">暂无下载任务</Typography>
+          {list.length === 0 && (
+            <Typography color="text.secondary">
+              暂无下载任务
+            </Typography>
           )}
-          {tasks.map(t => (
-            <Box key={t.taskId}>
-              <Typography variant="caption">{t.remotePath}</Typography>
-              <LinearProgress variant="determinate" value={t.progress || 0} />
-            </Box>
-          ))}
+
+          {list.map(t => {
+            console.log(t);
+
+            const progress = t.total
+              ? Math.min(100, (t.bytes / t.total) * 100)
+              : 0;
+
+            return (
+              <Box key={t.taskId || Math.random()}>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Typography variant="body2" noWrap sx={{ flex: 1 }}>
+                    {t.filename || t.remotePath}
+                  </Typography>
+                  <Chip size="small" label={t.status} />
+                </Stack>
+
+                <LinearProgress
+                  variant="determinate"
+                  value={t.status === 'completed' ? 100 : progress}
+                />
+              </Box>
+            );
+          })}
         </Stack>
       </CardContent>
     </Card>

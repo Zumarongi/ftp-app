@@ -1,7 +1,5 @@
-// src/electron/preload.js
 const { contextBridge, ipcRenderer } = require('electron');
 
-// keep mapping from user-provided callback -> wrapped listener so we can remove it later
 const _listeners = {
   progress: new Map(),
   completed: new Map(),
@@ -14,13 +12,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createFtpSession: (opts) => ipcRenderer.invoke('ftp:createSession', opts),
   ftpList: (opts) => ipcRenderer.invoke('ftp:list', opts),
   ftpDownload: (opts) => ipcRenderer.invoke('ftp:download', opts),
+  selectDownloadDir: () => ipcRenderer.invoke('dialog:selectDownloadDir'),
   ftpUpload: (opts) => ipcRenderer.invoke('ftp:upload', opts),
+  selectUploadFile: () => ipcRenderer.invoke('dialog:selectUploadFile'),
   ftpMkdir: (opts) => ipcRenderer.invoke('ftp:mkdir', opts),
   ftpRemove: (opts) => ipcRenderer.invoke('ftp:remove', opts),
   ftpRename: (opts) => ipcRenderer.invoke('ftp:rename', opts),
   ftpCancel: (opts) => ipcRenderer.invoke('ftp:cancelTask', opts),
   closeSession: (opts) => ipcRenderer.invoke('ftp:closeSession', opts),
   showSaveDialog: (opts) => ipcRenderer.invoke('dialog:showSave', opts),
+  openPath: (p) => ipcRenderer.invoke('shell:openPath', p),
   onProgress: (cb) => {
     const wrapper = (_, data) => cb(data);
     _listeners.progress.set(cb, wrapper);

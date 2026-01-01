@@ -5,35 +5,21 @@ const EventEmitter = require('events');
 class FtpClient extends EventEmitter {
   constructor() {
     super();
-    this.client = new ftp.Client(); // default timeout ~ 0 (infinite) - you can set client.ftp.timeout
+    this.client = new ftp.Client();
     this.client.ftp.verbose = true;
     this._progressHandler = null;
-    // sensible default timeout for control operations (ms)
     this.client.ftp.timeout = 15000;
   }
 
   async connect({ host, port = 21, user = "anonymous", pass = "", secure = false, timeout } = {}) {
-    // allow caller to override control socket timeout (ms)
     if (typeof timeout === 'number' && timeout > 0) this.client.ftp.timeout = timeout;
     try {
-      await this.client.access({
-        host,
-        port,
-        user,
-        password: pass,
-        secure
-      });
-    } catch (err) {
-      // rethrow to let callers handle and add context if needed
-      throw err;
-    }
+      await this.client.access({ host, port, user, password: pass, secure });
+    } catch (err) { throw err; }
   }
 
   async list(remotePath = "") {
-    // returns array of objects {name, size, type, rawModifiedAt, owner,...}
-    // console.log('FtpClient.list', remotePath);
     const raw = await this.client.list(remotePath);
-    // normalize entries to include `isDir` boolean and `path` if possible
     return raw.map(e => ({
       name: e.name,
       size: e.size,
@@ -45,7 +31,6 @@ class FtpClient extends EventEmitter {
   }
 
   async makeDir(remotePath) {
-    // basic-ftp provides send/ensureDir; use send MKD to create single dir
     try {
       await this.client.send(`MKD ${remotePath}`);
       return { ok: true };
@@ -96,55 +81,39 @@ class FtpClient extends EventEmitter {
    * @param {object} opts { resume: boolean, onProgress: fn(info) }
    */
   async download(remotePath, localPath, opts = {}) {
-    const { resume = true, onProgress } = opts;
-
-    console.log('FtpClient.download', { remotePath, localPath });
-
-    const remoteSize = await this.size(remotePath).catch(()=>undefined);
+    const { resume = true, onProgress, signal } = opts;
+    const remoteSize = await this.size(remotePath).catch(() => undefined);
     let startAt = 0;
 
-    // If file exists and resume requested, use existing size
     if (resume && fs.existsSync(localPath)) {
       try {
-        const st = fs.statSync(localPath);
-        startAt = st.size;
-      } catch (e) {
-        startAt = 0;
-      }
+        startAt = fs.statSync(localPath).size;
+      } catch {}
     }
 
     if (remoteSize !== undefined && startAt >= remoteSize) {
-      // already downloaded
-      return { ok: true, skipped: true, localPath, remoteSize };
+      return { skipped: true };
     }
 
-    // install progress handler
-    try {
-      if (typeof onProgress === "function") {
-        // trackProgress will call with { name, type, bytes, bytesOverall }
-        this._progressHandler = info => {
-          // emit progress event for consumers and call optional callback
-          const ev = {
-            name: info.name,
-            type: info.type, // 'download'|'upload'|'list'
-            bytes: info.bytes, // bytes transferred for this callback
-            bytesOverall: info.bytesOverall // bytes transferred since trackProgress set
-          };
-          this.emit('progress', ev);
-          try { onProgress(ev); } catch (e) {}
-        };
-        this.client.trackProgress(this._progressHandler);
-      } else {
-        this.client.trackProgress(); // disable
-      }
+    const progressHandler = info => {
+      onProgress?.({
+        bytes: info.bytesOverall,
+        total: remoteSize
+      });
+    };
 
-      // basic-ftp supports startAt parameter
+    this.client.trackProgress(progressHandler);
+
+    try {
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          this.client.close();
+        });
+      }
       await this.client.downloadTo(localPath, remotePath, startAt);
-      return { ok: true, localPath, remoteSize };
+      return { ok: true };
     } finally {
-      // stop tracking in all cases
-      try { this.client.trackProgress(); } catch (e) {}
-      this._progressHandler = null;
+      this.client.trackProgress();
     }
   }
 

@@ -4,6 +4,7 @@ import { CssBaseline, Box, AppBar, Toolbar, Typography, Grid } from '@mui/materi
 import SiteManager from './components/SiteManager';
 import DirectoryTree from './components/DirectoryTree';
 import DownloadQueue from './components/DownloadQueue';
+import DownloadResultDialog from './components/DownloadResultDialog';
 
 const theme = createTheme({
   palette: {
@@ -32,17 +33,16 @@ export default function App() {
 
       <Box p={2} sx={{ height: 'calc(100vh - 64px - 16px)' }}>
         <Grid container spacing={2} sx={{ height: '100%' }}>
-          <Grid size={{ xs: 12, md: 3 }}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <SiteManager onConnected={info => setSessionInfo(info)} />
           </Grid>
-          <Grid size={{ xs: 12, md: 6 }}>
+          <Grid size={{ xs: 12, md: 8 }}>
             <DirectoryTree sessionId={sessionInfo ? sessionInfo.sessionId : null} />
-          </Grid>
-          <Grid size={{ xs: 12, md: 3 }}>
-            <DownloadQueue />
           </Grid>
         </Grid>
       </Box>
+
+      <DownloadResultDialog />
     </ThemeProvider>
   );
 }

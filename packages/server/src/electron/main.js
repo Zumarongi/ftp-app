@@ -3,13 +3,61 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { Worker } = require('worker_threads');
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3');
 const bcrypt = require('bcryptjs');
 
 app.disableHardwareAcceleration();
 
 const dbPath = path.join(process.cwd(), 'ftp_users.db');
-const db = new Database(dbPath);
+const db = new sqlite3.Database(dbPath);
+
+function run(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve(this);
+    });
+  });
+}
+
+function get(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
+
+function all(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+}
+
+async function initDB() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE,
+      passwordHash TEXT,
+      home TEXT,
+      perms INTEGER DEFAULT 31
+    )
+  `);
+
+  const row = await get('SELECT COUNT(*) AS c FROM users');
+  if (row.c === 0) {
+    const pass = bcrypt.hashSync('password', 10);
+    await run(
+      'INSERT INTO users(username,passwordHash,home,perms) VALUES(?,?,?,?)',
+      ['admin', pass, 'admin_home', 31]
+    );
+  }
+}
 
 // read package-level .env for server defaults (optional)
 let envRootBase;
@@ -30,21 +78,6 @@ try {
   }
 } catch (e) {
   console.error('Failed to read server .env', e && e.message);
-}
-
-db.prepare(`CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY,
-  username TEXT UNIQUE,
-  passwordHash TEXT,
-  home TEXT,
-  perms INTEGER DEFAULT 31
-)`).run();
-
-// seed default admin
-const rowcount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-if (rowcount === 0) {
-  const pass = bcrypt.hashSync('password', 10);
-  db.prepare('INSERT INTO users(username,passwordHash,home,perms) VALUES(?,?,?,?)').run('admin', pass, 'admin_home', 31);
 }
 
 let mainWindow = null;
@@ -69,15 +102,18 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  await initDB();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-function startFtpServer(config = {}) {
+async function startFtpServer(config = {}) {
   if (ftpWorker) return;
-  const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
+  const users = await all('SELECT username,passwordHash,home,perms FROM users');
   const workerPath = path.join(__dirname, 'ftpServer.js');
   ftpWorker = new Worker(workerPath);
   ftpWorker.on('message', (msg) => {
@@ -105,7 +141,10 @@ ipcMain.handle('server:start', async (_, cfg) => { startFtpServer(cfg); return {
 
 ipcMain.handle('server:stop', async () => { stopFtpServer(); return { ok: true }; });
 
-ipcMain.handle('server:listUsers', async () => { const rows = db.prepare('SELECT id,username,home,perms FROM users').all(); return { users: rows }; });
+ipcMain.handle('server:listUsers', async () => {
+  const users = await all('SELECT id, username, home, perms FROM users');
+  return { users };
+});
 
 function validateUsername(username) {
   return typeof username === 'string'
@@ -115,7 +154,6 @@ function validateUsername(username) {
 function validateHome(home) {
   return typeof home === 'string'
     && /^[a-zA-Z0-9_-]+$/.test(home)
-    && !home.includes('..');
 }
 
 ipcMain.handle('server:addUser', async (_, { username, password, home, perms = 31 }) => {
@@ -127,37 +165,37 @@ ipcMain.handle('server:addUser', async (_, { username, password, home, perms = 3
     if (!validateHome(home)) return { ok: false, error: 'Invalid home' };
 
     const hash = bcrypt.hashSync(password, 10);
-    db.prepare('INSERT INTO users(username,passwordHash,home,perms) VALUES(?,?,?,?)').run(username, hash, home, perms);
-    const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
+    await run('INSERT INTO users(username,passwordHash,home,perms) VALUES(?,?,?,?)',[username, hash, home, perms]);
+    const users = await all('SELECT username,passwordHash,home,perms FROM users');
     ftpWorker?.postMessage({ cmd: 'reloadUsers', users });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('server:removeUser', async (_, { username }) => {
-  db.prepare('DELETE FROM users WHERE username = ?').run(username);
-  if (ftpWorker) {
-    const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
-    ftpWorker.postMessage({ cmd: 'reloadUsers', users });
-  }
-  return { ok: true };
-});
-
 ipcMain.handle('server:updateUser', async (_, { username, password, home, perms }) => {
   try {
     if (!validateUsername(username)) return { ok: false, error: 'Invalid username' };
-    const existing = db.prepare('SELECT home FROM users WHERE username = ?').get(username);
+    const existing = await all('SELECT home FROM users WHERE username = ?', [username]);
     if (!existing) return { ok: false, error: 'User not found' };
     if (password) {
       const hash = bcrypt.hashSync(password, 10);
-      db.prepare('UPDATE users SET passwordHash=?, perms=? WHERE username=?').run(hash, perms, username);
+      await run('UPDATE users SET passwordHash=?, perms=? WHERE username=?', [hash, perms, username]);
     } else {
-      db.prepare('UPDATE users SET perms=? WHERE username=?').run(perms, username);
+      await run('UPDATE users SET perms=? WHERE username=?', [perms, username]);
     }
-    const users = db.prepare('SELECT username,passwordHash,home,perms FROM users').all();
+    const users = await all('SELECT username,passwordHash,home,perms FROM users');
     ftpWorker?.postMessage({ cmd: 'reloadUsers', users });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message };} }
 );
+
+ipcMain.handle('server:removeUser', async (_, { username }) => {
+  await run('DELETE FROM users WHERE username = ?', [username]);
+  if (ftpWorker) {
+    const users = await all('SELECT username,passwordHash,home,perms FROM users');
+    ftpWorker.postMessage({ cmd: 'reloadUsers', users });
+  }
+  return { ok: true };
+});
 
 ipcMain.handle('server:dbPath', async () => ({ path: dbPath }));

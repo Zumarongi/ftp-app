@@ -152,6 +152,7 @@ export default function UserManager() {
               </TableRow>
             </TableHead>
             <TableBody>
+              {console.log("users", users)}
               {users.map(u => (
                 <TableRow key={u.username}>
                   <TableCell>{u.username}</TableCell>

@@ -59,10 +59,6 @@ export default function SiteManager({ onConnected }) {
             control={<Checkbox checked={form.passive} onChange={e => setForm({ ...form, passive: e.target.checked })} />}
             label="PASV"
           />
-          <FormControlLabel
-            control={<Checkbox checked={form.secure} onChange={e => setForm({ ...form, secure: e.target.checked })} />}
-            label="使用 TLS/FTPS"
-          />
           <TextField label="Timeout(ms)" value={form.timeout} onChange={e => setForm({ ...form, timeout: e.target.value })} />
           <Button variant="contained" onClick={addSite}>保存站点</Button>
 

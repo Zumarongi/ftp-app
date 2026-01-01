@@ -209,14 +209,11 @@ function onControlConnection(socket) {
         const pasvSrv = net.createServer();
         pasvSrv.maxConnections = 1;
         pasvSrv.listen(port, () => {
-          // Derive an IPv4 dotted-quad for the PASV response.
-          // socket.localAddress may be IPv6 or IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1)
           let host = socket.localAddress || '127.0.0.1';
           if (typeof host === 'string' && host.startsWith('::ffff:')) {
             host = host.split(':').pop();
           }
           if (host === '::1') host = '127.0.0.1';
-          // Fallback to loopback if not a dotted IPv4 address
           if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) host = '127.0.0.1';
           const parts = host.split('.').map(n => Number(n));
           const p1 = Math.floor(port / 256);
@@ -236,14 +233,11 @@ function onControlConnection(socket) {
         const argPath = rest.join('') ? rest.join(' ') : '';
         const listingPath = argPath || state.cwd || '/';
         const realPath = normalizeVirtualPath(state.userHome, listingPath);
-
-        console.log('LIST realPath=', realPath);
-
+        // console.log('LIST realPath=', realPath);
         send('150 Opening ASCII mode data connection for file list');
         await sendListOverData(state, realPath);
         send('226 Transfer complete');
       } else if (up === 'SIZE') {
-        // Return size of a file in bytes: 213 <size>
         if (!state.userHome) return send('530 Not logged in');
         if (!hasPerm(state.userObj, PERM_READ)) return send('550 Permission denied');
         const remote = arg;

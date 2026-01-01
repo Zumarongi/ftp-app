@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   Card, CardHeader, CardContent, Box,
-  Stack, Button, Typography, List, ListItem,
+  Stack, Button, Typography, List, ListItem, ListItemButton,
   ListItemText, IconButton, Divider,
   Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, Breadcrumbs, Link
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
+import UploadIcon from '@mui/icons-material/Upload';
 import FolderIcon from '@mui/icons-material/Folder';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -21,6 +22,9 @@ export default function DirectoryTree({ sessionId }) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [inputValue, setInputValue] = useState('');
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [downloadEntry, setDownloadEntry] = useState(null);
+
 
   const joinPath = (base, name) => {
     if (!base || base === '/') return `/${name}`;
@@ -62,11 +66,41 @@ export default function DirectoryTree({ sessionId }) {
     if (e.isDir) {
       setCwd(joinPath(cwd, e.name));
     } else {
+      setDownloadEntry(e);
+      setDownloadOpen(true);
+    }
+  };
+
+  const confirmDownload = async () => {
+    if (!downloadEntry) return;
+
+    const res = await window.electronAPI.selectDownloadDir();
+    console.log('selectDownloadDir result', res);
+    if (!res?.canceled && res?.path) {
       await window.electronAPI.ftpDownload({
         sessionId,
-        remotePath: joinPath(cwd, e.name)
+        remotePath: joinPath(cwd, downloadEntry.name),
+        localPath: res.path
       });
     }
+
+    setDownloadOpen(false);
+    setDownloadEntry(null);
+  };
+
+  const doUpload = async () => {
+    if (!sessionId) return;
+
+    const res = await window.electronAPI.selectUploadFile();
+    if (res?.canceled || !res?.filePath) return;
+
+    await window.electronAPI.ftpUpload({
+      sessionId,
+      localPath: res.filePath,
+      remotePath: joinPath(cwd, res.fileName)
+    });
+
+    refresh();
   };
 
   const doUp = () => {
@@ -146,6 +180,12 @@ export default function DirectoryTree({ sessionId }) {
               >
                 根目录
               </Button>
+              <Button
+                startIcon={<UploadIcon />}
+                onClick={doUpload}
+              >
+                上传文件
+              </Button>
             </Stack>
 
             <Breadcrumbs sx={{ fontSize: 12 }}>
@@ -172,14 +212,12 @@ export default function DirectoryTree({ sessionId }) {
 
             <Divider />
 
-            <Box sx={{ flex: 1, overflow: 'auto' }}>
+            <Box sx={{ flex: 1, overflow: 'auto' }} onClick={() => setSelected(null)}>
               <List dense>
                 {sortedEntries.map((e, i) => (
                   <ListItem
                     key={e.name + i}
-                    selected={selected === i}
-                    onClick={() => setSelected(i)}
-                    onDoubleClick={() => enter(e)}
+                    disablePadding
                     secondaryAction={
                       !e.isDir && (
                         <IconButton onClick={() => enter(e)}>
@@ -188,11 +226,34 @@ export default function DirectoryTree({ sessionId }) {
                       )
                     }
                   >
-                    {e.isDir ? <FolderIcon sx={{ mr: 1 }} /> : null}
-                    <ListItemText
-                      primary={e.name}
-                      secondary={e.isDir ? '目录' : '文件'}
-                    />
+                    <ListItemButton
+                      selected={selected === i}onClick={(evt) => {
+                        evt.stopPropagation();
+                        setSelected(i);
+                      }}
+                      onDoubleClick={(evt) => {
+                        evt.stopPropagation();
+                        enter(e);
+                      }}
+                      sx={{
+                        '&:hover': {
+                          backgroundColor: 'action.hover',
+                        },
+                        '&.Mui-selected': {
+                          backgroundColor: 'primary.light',
+                        },
+                        '&.Mui-selected:hover': {
+                          backgroundColor: 'primary.main',
+                          color: 'primary.contrastText',
+                        },
+                      }}
+                    >
+                      {e.isDir && <FolderIcon sx={{ mr: 1 }} />}
+                      <ListItemText
+                        primary={e.name}
+                        secondary={e.isDir ? '目录' : '文件'}
+                      />
+                    </ListItemButton>
                   </ListItem>
                 ))}
                 {!sortedEntries.length && (
@@ -241,6 +302,7 @@ export default function DirectoryTree({ sessionId }) {
             autoFocus fullWidth
             label="文件夹名称"
             value={inputValue}
+            sx={{ mt: 1 }}
             onChange={e => setInputValue(e.target.value)}
           />
         </DialogContent>
@@ -276,6 +338,21 @@ export default function DirectoryTree({ sessionId }) {
         <DialogActions>
           <Button onClick={() => setConfirmOpen(false)}>取消</Button>
           <Button color="error" variant="contained" onClick={doRemove}>删除</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={downloadOpen} onClose={() => setDownloadOpen(false)}>
+        <DialogTitle>确认下载</DialogTitle>
+        <DialogContent>
+          <Typography>
+            是否下载文件「{downloadEntry?.name}」？
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDownloadOpen(false)}>取消</Button>
+          <Button variant="contained" onClick={confirmDownload}>
+            选择位置并下载
+          </Button>
         </DialogActions>
       </Dialog>
     </Card>
